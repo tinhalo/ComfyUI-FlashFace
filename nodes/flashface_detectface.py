@@ -25,6 +25,7 @@ class FlashFaceDetectFace:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "images": ("IMAGE",),
             },
         }
     RETURN_TYPES = ("PIL_IMAGE", )
@@ -32,24 +33,18 @@ class FlashFaceDetectFace:
     CATEGORY = "FlashFace"
 
     def detect_face(self, **kwargs):
-        imgs = []
-
-        for k, v in kwargs.items():
-            imgs.append(v)
-
+        images = kwargs.get('images')
+        if not isinstance(images, torch.Tensor) or images.dim() != 4:
+            raise ValueError("Input should be a list of images")
+        
         pil_imgs = []
-        # convert each image to PIL and append to list
-        for img in imgs:
+        # convert each image in the batch to PIL and append to list
+        for img in images:
             img = img.squeeze(0)
             img = img.permute(2, 0, 1)
             pil_image = F.to_pil_image(img)
             pil_imgs.append(pil_image)
 
-        # flatten the list
-        # pil_imgs = [item for sublist in imgs for item in sublist]
-
-        # read images
-        # pil_imgs = imgs
         b = len(pil_imgs)
         vis_pil_imgs = copy.deepcopy(pil_imgs)
 
@@ -79,8 +74,8 @@ class FlashFaceDetectFace:
             # crop faces
             crops = crop_face(pil_imgs[i], boxes[i], kpts[i])
             if len(crops) != 1:
-                raise (
-                    f'Find {len(crops)} faces in the image {i + 1}, please ensure there is only one face in each image'
+                raise ValueError(
+                    f'Found {len(crops)} faces in the image {i + 1}, please ensure there is only one face in each image'
                 )
 
             face_imgs += crops
@@ -91,7 +86,5 @@ class FlashFaceDetectFace:
                 box = box[:4].tolist()
                 box = [int(x) for x in box]
                 draw.rectangle(box, outline='red', width=4)
-
-        face_imgs = face_imgs
 
         return (face_imgs, )
