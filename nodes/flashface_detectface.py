@@ -3,14 +3,14 @@ import torch
 import torchvision.transforms as T
 import torchvision.transforms.functional as F
 from PIL import ImageDraw
+
 from ..flashface.all_finetune.utils import PadToSquare, get_padding
 from ..ldm.models.retinaface import crop_face, retinaface
 
-# Initialize padding and transformations
 padding_to_square = PadToSquare(224)
+
 retinaface_transforms = T.Compose([PadToSquare(size=640), T.ToTensor()])
 
-# Load pretrained RetinaFace model
 retinaface = retinaface(pretrained=True, device='cuda').eval().requires_grad_(False)
 
 class FlashFaceDetectFace:
@@ -21,22 +21,18 @@ class FlashFaceDetectFace:
                 "images": ("IMAGE",),
             },
         }
-
-    RETURN_TYPES = ("PIL_IMAGE", "IMAGE")
+    RETURN_TYPES = ("PIL_IMAGE", "IMAGE")  # Updated RETURN_TYPES
     FUNCTION = "detect_face"
     CATEGORY = "FlashFace"
 
     def detect_face(self, **kwargs):
         images = kwargs.get('images')
-        
-        # Validate input is a 4D tensor
         if not isinstance(images, torch.Tensor) or images.dim() != 4:
             raise ValueError("Input should be a 4D tensor of images")
-
+        
         pil_imgs = []
         tensor_imgs = []
 
-        # Convert each tensor image to PIL and store both formats
         for img in images:
             img = img.squeeze(0)
             img = img.permute(2, 0, 1)
@@ -47,7 +43,7 @@ class FlashFaceDetectFace:
         b = len(pil_imgs)
         vis_pil_imgs = copy.deepcopy(pil_imgs)
 
-        # Transform images for RetinaFace and move to CUDA device
+        # detection
         imgs = torch.stack([retinaface_transforms(u) for u in pil_imgs]).to('cuda')
         boxes, kpts = retinaface.detect(imgs, min_thr=0.6)
 
@@ -55,7 +51,6 @@ class FlashFaceDetectFace:
         tensor_face_imgs = []
 
         for i in range(b):
-            # Scale and padding adjustment
             scale = 640 / max(pil_imgs[i].size)
             left, top, _, _ = get_padding(round(scale * pil_imgs[i].width),
                                           round(scale * pil_imgs[i].height), 640)
@@ -68,30 +63,23 @@ class FlashFaceDetectFace:
             boxes[i][:, :4] /= scale
             kpts[i][:, :, :2] /= scale
 
-            # Crop face(s) from the image
             crops = crop_face(pil_imgs[i], boxes[i], kpts[i])
             if len(crops) != 1:
-                raise ValueError(f'Found {len(crops)} faces in the image {i + 1}, please ensure there is only one face in each image')
+                raise ValueError(
+                    f'Found {len(crops)} faces in the image {i + 1}, please ensure there is only one face in each image'
+                )
 
-            # Resize cropped face to 224x224 and store both PIL and tensor formats
-            for crop in crops:
-                resized_crop = crop.resize((224, 224))
-                face_imgs.append(resized_crop)
-                tensor_face_imgs.append(F.to_tensor(resized_crop).unsqueeze(0))
+            face_imgs += crops
+            tensor_face_imgs += [tensor_imgs[i]] * len(crops)
 
-            # Draw bounding boxes on the visualization images
             draw = ImageDraw.Draw(vis_pil_imgs[i])
             for box in boxes[i]:
                 box = box[:4].tolist()
                 box = [int(x) for x in box]
                 draw.rectangle(box, outline='red', width=4)
 
-        # Stack tensors into a 4D tensor
-        if tensor_face_imgs:
-            tensor_face_imgs = torch.cat(tensor_face_imgs, dim=0)
-
-        # Permute tensor_face_imgs to (batch_size, height, width, channels)
+        # Permute tensor_face_imgs to (batch_size, channels, height, width) format
         tensor_face_imgs = [img.permute(1,2,0) for img in tensor_face_imgs]
 
-        # Return both PIL images and the corresponding 4D tensor
+        # Returning both PIL images and tensors for faces
         return (face_imgs, tensor_face_imgs)
