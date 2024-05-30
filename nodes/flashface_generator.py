@@ -170,8 +170,8 @@ class FlashFaceGenerator:
         for img in imgs_pil:
             img_tensor = F.to_tensor(img)
             # Ensure the data type is correct
-            img_np = img_tensor.permute(1, 2, 0)
-
+            img_np = img_tensor.permute(1, 2, 0).unsqueeze(0)
             torch_imgs.append(img_np)
+        torch_imgs = torch.cat(torch_imgs, dim=0,)
 
         return (torch_imgs, )
