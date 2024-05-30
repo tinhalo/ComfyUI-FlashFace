@@ -40,7 +40,9 @@ class FlashFaceGenerator:
                 "face_bbox_x1": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.1}),
                 "face_bbox_y1": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.1}),
                 "face_bbox_x2": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "face_bbox_y2": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "face_bbox_y2": ("FLOAT", {"default": 0.4, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "height":("INT",{"default":768,"min":8,"max":16000}),
+		            "width":("INT",{"default":768,"min":8,"max":16000}),
                 "num_samples": ("INT", {"default": 1}),
 
             }
@@ -52,7 +54,7 @@ class FlashFaceGenerator:
 
     def generate(self, model, positive, negative, reference_faces, vae, seed, sampler, steps, text_guidance_strength,
                  reference_feature_strength, reference_guidance_strength, step_to_launch_face_guidance, face_bbox_x1,
-                 face_bbox_y1, face_bbox_x2, face_bbox_y2, num_samples):
+                 face_bbox_y1, face_bbox_x2, face_bbox_y2, height, width,num_samples):
 
         # reference_faces = [image1[0], image2[0], image3[0], image4[0]]
         seed_everything(seed)
@@ -75,7 +77,8 @@ class FlashFaceGenerator:
 
         # process the ref_imgs
         face_bbox = [face_bbox_x1, face_bbox_y1, face_bbox_x2, face_bbox_y2]
-        H = W = 768
+        H = height
+        W = width
         if isinstance(face_bbox, str):
             face_bbox = eval(face_bbox)
         normalized_bbox = face_bbox
@@ -138,8 +141,8 @@ class FlashFaceGenerator:
             z0 = diffusion.sample(solver=sampler,
                                   noise=torch.empty(num_samples,
                                                     4,
-                                                    768 // 8,
-                                                    768 // 8,
+                                                    H // 8,
+                                                    W // 8,
                                                     device='cuda').normal_(),
                                   model=model,
                                   model_kwargs=[positive, negative],
@@ -167,8 +170,8 @@ class FlashFaceGenerator:
         for img in imgs_pil:
             img_tensor = F.to_tensor(img)
             # Ensure the data type is correct
-            img_np = img_tensor.permute(1, 2, 0)
-
+            img_np = img_tensor.permute(1, 2, 0).unsqueeze(0)
             torch_imgs.append(img_np)
+        torch_imgs = torch.cat(torch_imgs, dim=0,)
 
         return (torch_imgs, )

@@ -1,18 +1,11 @@
 import copy
-import random
-
-import numpy as np
 import torch
-import torch.cuda.amp as amp
 import torchvision.transforms as T
 import torchvision.transforms.functional as F
-from PIL import ImageOps, ImageSequence
-from PIL import Image, ImageDraw
+from PIL import ImageDraw
 
-from ..flashface.all_finetune.config import cfg
-from ..flashface.all_finetune.utils import Compose, PadToSquare, seed_everything, get_padding
+from ..flashface.all_finetune.utils import PadToSquare, get_padding
 from ..ldm.models.retinaface import crop_face, retinaface
-import comfy.samplers
 
 padding_to_square = PadToSquare(224)
 
@@ -25,31 +18,28 @@ class FlashFaceDetectFace:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "images": ("IMAGE",),
             },
         }
-    RETURN_TYPES = ("PIL_IMAGE", )
+    RETURN_TYPES = ("PIL_IMAGE", "IMAGE")  # Updated RETURN_TYPES
     FUNCTION = "detect_face"
     CATEGORY = "FlashFace"
 
     def detect_face(self, **kwargs):
-        imgs = []
-
-        for k, v in kwargs.items():
-            imgs.append(v)
-
+        images = kwargs.get('images')
+        if not isinstance(images, torch.Tensor) or images.dim() != 4:
+            raise ValueError("Input should be a 4D tensor of images")
+        
         pil_imgs = []
-        # convert each image to PIL and append to list
-        for img in imgs:
+        tensor_imgs = []
+
+        for img in images:
             img = img.squeeze(0)
             img = img.permute(2, 0, 1)
             pil_image = F.to_pil_image(img)
             pil_imgs.append(pil_image)
+            tensor_imgs.append(img)
 
-        # flatten the list
-        # pil_imgs = [item for sublist in imgs for item in sublist]
-
-        # read images
-        # pil_imgs = imgs
         b = len(pil_imgs)
         vis_pil_imgs = copy.deepcopy(pil_imgs)
 
@@ -57,41 +47,39 @@ class FlashFaceDetectFace:
         imgs = torch.stack([retinaface_transforms(u) for u in pil_imgs]).to('cuda')
         boxes, kpts = retinaface.detect(imgs, min_thr=0.6)
 
-        # undo padding and scaling
         face_imgs = []
+        tensor_face_imgs = []
 
         for i in range(b):
-            # params
             scale = 640 / max(pil_imgs[i].size)
             left, top, _, _ = get_padding(round(scale * pil_imgs[i].width),
                                           round(scale * pil_imgs[i].height), 640)
 
-            # undo padding
             boxes[i][:, [0, 2]] -= left
             boxes[i][:, [1, 3]] -= top
             kpts[i][:, :, 0] -= left
             kpts[i][:, :, 1] -= top
 
-            # undo scaling
             boxes[i][:, :4] /= scale
             kpts[i][:, :, :2] /= scale
 
-            # crop faces
             crops = crop_face(pil_imgs[i], boxes[i], kpts[i])
             if len(crops) != 1:
-                raise (
-                    f'Find {len(crops)} faces in the image {i + 1}, please ensure there is only one face in each image'
+                raise ValueError(
+                    f'Found {len(crops)} faces in the image {i + 1}, please ensure there is only one face in each image'
                 )
 
             face_imgs += crops
+            tensor_face_imgs += [tensor_imgs[i]] * len(crops)
 
-            # draw boxes on the pil image
             draw = ImageDraw.Draw(vis_pil_imgs[i])
             for box in boxes[i]:
                 box = box[:4].tolist()
                 box = [int(x) for x in box]
                 draw.rectangle(box, outline='red', width=4)
 
-        face_imgs = face_imgs
+        # Permute tensor_face_imgs to (batch_size, channels, height, width) format
+        tensor_face_imgs = [img.permute(1,2,0) for img in tensor_face_imgs]
 
-        return (face_imgs, )
+        # Returning both PIL images and tensors for faces
+        return (face_imgs, tensor_face_imgs)
