@@ -1,24 +1,20 @@
-import copy
-import random
-
 import numpy as np
 import torch
 import torch.cuda.amp as amp
 import torchvision.transforms as T
 import torchvision.transforms.functional as F
-from PIL import ImageOps, ImageSequence
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from ..flashface.all_finetune.config import cfg
-from ..flashface.all_finetune.utils import Compose, PadToSquare, seed_everything, get_padding
-from ..ldm.models.retinaface import crop_face, retinaface
-import comfy.samplers
+from ..flashface.all_finetune.utils import Compose, PadToSquare, seed_everything
+from ..ldm.models.retinaface import retinaface
 
 padding_to_square = PadToSquare(224)
 
 retinaface_transforms = T.Compose([PadToSquare(size=640), T.ToTensor()])
 
 retinaface = retinaface(pretrained=True, device='cuda').eval().requires_grad_(False)
+
 
 class FlashFaceGenerator:
     @classmethod
@@ -31,7 +27,7 @@ class FlashFaceGenerator:
                 "reference_faces": ("PIL_IMAGE", {}),
                 "vae": ("VAE", {}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 2147483647}),
-                "sampler": (['ddim', 'euler',], ),
+                "sampler": (['ddim', 'euler', ],),
                 "steps": ("INT", {"default": 35}),
                 "text_guidance_strength": ("FLOAT", {"default": 7.5, "min": 0.0, "max": 10.0, "step": 0.1}),
                 "reference_feature_strength": ("FLOAT", {"default": 1.2, "min": 0.7, "max": 1.4, "step": 0.05}),
@@ -41,20 +37,19 @@ class FlashFaceGenerator:
                 "face_bbox_y1": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.1}),
                 "face_bbox_x2": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.1}),
                 "face_bbox_y2": ("FLOAT", {"default": 0.4, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "height":("INT",{"default":768,"min":8,"max":16000}),
-		            "width":("INT",{"default":768,"min":8,"max":16000}),
+                "height": ("INT", {"default": 768, "min": 8, "max": 16000}),
+                "width": ("INT", {"default": 768, "min": 8, "max": 16000}),
                 "num_samples": ("INT", {"default": 1}),
-
             }
         }
-    RETURN_TYPES = ("IMAGE", )
+
+    RETURN_TYPES = ("IMAGE",)
     FUNCTION = "generate"
     CATEGORY = "FlashFace"
 
-
     def generate(self, model, positive, negative, reference_faces, vae, seed, sampler, steps, text_guidance_strength,
                  reference_feature_strength, reference_guidance_strength, step_to_launch_face_guidance, face_bbox_x1,
-                 face_bbox_y1, face_bbox_x2, face_bbox_y2, height, width,num_samples):
+                 face_bbox_y1, face_bbox_x2, face_bbox_y2, height, width, num_samples):
 
         # reference_faces = [image1[0], image2[0], image3[0], image4[0]]
         seed_everything(seed)
@@ -172,6 +167,6 @@ class FlashFaceGenerator:
             # Ensure the data type is correct
             img_np = img_tensor.permute(1, 2, 0).unsqueeze(0)
             torch_imgs.append(img_np)
-        torch_imgs = torch.cat(torch_imgs, dim=0,)
+        torch_imgs = torch.cat(torch_imgs, dim=0, )
 
-        return (torch_imgs, )
+        return (torch_imgs,)
