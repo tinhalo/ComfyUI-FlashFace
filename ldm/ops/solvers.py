@@ -32,6 +32,7 @@ def sample_euler(noise, model, sigmas, show_progress=True):
 
 @torch.no_grad()
 def sample_euler_ancestral(noise, model, sigmas, show_progress=True):
-    noise = comfy_sample_euler_ancestral(model, noise, sigmas, s_noise=1.2, eta=.5)
+    noise = comfy_sample_euler_ancestral(model, noise, sigmas, s_noise=.97, eta=1.8)
 
     return noise
+
