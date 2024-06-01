@@ -149,7 +149,7 @@ class GaussianDiffusion(object):
         assert discard_penultimate_step in (None, True, False)
         assert return_intermediate in (None, 'x0', 'xt')
         # assert that solver is ddim
-        assert solver in ('ddim', 'euler', 'euler_ancestral', 'dpm2',)
+        assert solver in ('ddim', 'euler', 'euler_ancestral', 'dpm_2',)
         # function of diffusion solver
         if solver == 'ddim':
             solver_fn = {'ddim': sample_ddim}[solver]
@@ -157,8 +157,8 @@ class GaussianDiffusion(object):
             solver_fn = {'euler': sample_euler}[solver]
         elif solver == 'euler_ancestral':
             solver_fn = {'euler_ancestral': sample_euler_ancestral}[solver]
-        elif solver == 'dpm2':
-            solver_fn = {'dpm2': sample_dpm_2}[solver]
+        elif solver == 'dpm_2':
+            solver_fn = {'dpm_2': sample_dpm_2}[solver]
 
         # options
         schedule = 'karras' if 'karras' in solver else None
