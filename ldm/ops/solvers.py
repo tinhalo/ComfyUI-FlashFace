@@ -3,8 +3,9 @@ from tqdm.auto import trange
 
 from comfy.k_diffusion.sampling import sample_euler as comfy_sample_euler
 from comfy.k_diffusion.sampling import sample_euler_ancestral as comfy_sample_euler_ancestral
+from comfy.k_diffusion.sampling import sample_dpm_2 as comfy_sample_dpm_2
 
-__all__ = ['sample_ddim', 'sample_euler', 'sample_euler_ancestral']
+__all__ = ['sample_ddim', 'sample_euler', 'sample_euler_ancestral', 'sample_dpm_2']
 
 
 @torch.no_grad()
@@ -33,6 +34,12 @@ def sample_euler(noise, model, sigmas, show_progress=True):
 @torch.no_grad()
 def sample_euler_ancestral(noise, model, sigmas, show_progress=True):
     noise = comfy_sample_euler_ancestral(model, noise, sigmas, s_noise=.97, eta=1.8)
+
+    return noise
+
+@torch.no_grad()
+def sample_dpm_2(noise, model, sigmas, show_progress=True):
+    noise = comfy_sample_dpm_2(model, noise, sigmas, s_churn=0.75)
 
     return noise
 
