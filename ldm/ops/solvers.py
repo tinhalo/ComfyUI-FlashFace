@@ -32,17 +32,20 @@ def sample_euler(noise, model, sigmas, show_progress=True):
 
     return noise
 
+
 @torch.no_grad()
 def sample_euler_ancestral(noise, model, sigmas, show_progress=True):
     noise = comfy_sample_euler_ancestral(model, noise, sigmas, s_noise=.97, eta=1.8)
 
     return noise
 
+
 @torch.no_grad()
 def sample_dpm_2(noise, model, sigmas, show_progress=True):
     noise = comfy_sample_dpm_2(model, noise, sigmas, s_churn=0.75)
 
     return noise
+
 
 @torch.no_grad()
 def sample_dpm_2_ancestral(noise, model, sigmas, show_progress=True):
