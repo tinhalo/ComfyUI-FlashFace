@@ -69,7 +69,7 @@ class FlashFaceGenerator:
             [T.ToTensor(),
              T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
 
-        lamda_feat_before_ref_guidence = 0.85
+        lamda_feat_before_ref_guidance = 0.85
 
         # process the ref_imgs
         face_bbox = [face_bbox_x1, face_bbox_y1, face_bbox_x2, face_bbox_y2]
@@ -115,11 +115,11 @@ class FlashFaceGenerator:
         model.share_cache['ref'] = ref_z0
         model.share_cache['similarity'] = torch.tensor(reference_feature_strength).cuda()
         model.share_cache['ori_similarity'] = torch.tensor(reference_feature_strength).cuda()
-        model.share_cache['lamda_feat_before_ref_guidance'] = torch.tensor(lamda_feat_before_ref_guidence).cuda()
+        model.share_cache['lamda_feat_before_ref_guidence'] = torch.tensor(lamda_feat_before_ref_guidance).cuda()
         model.share_cache['ref_context'] = negative.repeat(len(ref_z0), 1, 1)
         model.share_cache['masks'] = empty_mask
         model.share_cache['classifier'] = reference_guidance_strength
-        model.share_cache['step_to_launch_face_guidance'] = step_to_launch_face_guidance
+        model.share_cache['step_to_launch_face_guidence'] = step_to_launch_face_guidance
 
         diffusion.classifier = reference_guidance_strength
 
