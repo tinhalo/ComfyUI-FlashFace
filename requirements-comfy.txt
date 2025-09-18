@@ -4,3 +4,4 @@ numpy==1.24.4
 omegaconf==2.3.0
 easydict==1.13
 ftfy==6.2.0
+pydash==7.0.7

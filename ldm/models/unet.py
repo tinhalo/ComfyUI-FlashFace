@@ -32,8 +32,8 @@ class GroupNorm(nn.GroupNorm):
     def __init__(self, num_groups, dim, eps=1e-6, affine=True, **kwargs):
         super().__init__(num_groups, dim, eps, affine, **kwargs)
 
-    def forward(self, x):
-        return super().forward(x.float()).type_as(x)
+    def forward(self, input):
+        return super().forward(input.float()).type_as(input)
 
 
 class Upsample(nn.Module):
@@ -70,7 +70,9 @@ class ResidualBlock(nn.Module):
             else nn.Conv2d(in_dim, out_dim, 1)
 
         # zero out the last layer params
-        nn.init.zeros_(self.layer2[-1].weight)
+        last_layer = self.layer2[-1]
+        if isinstance(last_layer, nn.Conv2d) and hasattr(last_layer, 'weight'):
+            nn.init.zeros_(last_layer.weight)
 
     def forward(self, x, e):
         identity = x
@@ -403,9 +405,13 @@ class UNet(nn.Module):
             nn.Conv2d(out_dim, self.out_dim, 3, padding=1))
 
         # zero out the last layer params
-        nn.init.zeros_(self.head[-1].weight)
+        last_layer = self.head[-1]
+        if isinstance(last_layer, nn.Conv2d) and hasattr(last_layer, 'weight'):
+            nn.init.zeros_(last_layer.weight)
         if y_dim is not None:
-            nn.init.zeros_(self.y_embedding[-1].weight)
+            last_layer = self.y_embedding[-1]
+            if isinstance(last_layer, nn.Linear) and hasattr(last_layer, 'weight'):
+                nn.init.zeros_(last_layer.weight)
 
     def forward(self,
                 x,
@@ -426,8 +432,14 @@ class UNet(nn.Module):
             x, *xs = self.encode(x, *args)
             x = self.decode(x, *args, *xs)
         else:
-            x, *xs = checkpoint(self.encode, x, *args)
-            x = checkpoint(self.decode, x, *args, *xs)
+            result = checkpoint(self.encode, x, *args)
+            if result is not None:
+                x, *xs = result
+                x = checkpoint(self.decode, x, *args, *xs)
+            else:
+                # Fallback to non-checkpoint version if checkpoint fails
+                x, *xs = self.encode(x, *args)
+                x = self.decode(x, *args, *xs)
         return x
 
     def encode(self, x, e, context, mask, caching, style_fidelity):

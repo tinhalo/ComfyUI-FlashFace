@@ -14,13 +14,23 @@ from models import sd_v1_ref_unet
 from ops.context_diffusion import ContextGaussianDiffusion
 from PIL import Image, ImageDraw
 from utils import Compose, PadToSquare, get_padding, seed_everything
+from enhanced_transforms import EnhancedPadToSquare, EnhancedCompose, create_face_transforms
 
 from ldm import data, models, ops
 from ldm.models.retinaface import crop_face, retinaface
 from ldm.models.vae import sd_v1_vae
+from ldm.utils import load_model_weights
+from PIL import Image, ImageDraw
+from utils import Compose, PadToSquare, get_padding, seed_everything
+from enhanced_transforms import EnhancedPadToSquare, EnhancedCompose, create_face_transforms
+
+from ldm import data, models, ops
+from ldm.models.retinaface import crop_face, retinaface
+from ldm.models.vae import sd_v1_vae
+from ldm.utils import load_model_weights
 
 # model path
-SKIP_LOAD = False
+SKIP_LOAD = True  # Set to True to skip loading models that aren't downloaded yet
 DEBUG_VIEW = False
 SKEP_LOAD = False
 LOAD_FLAG = True
@@ -32,14 +42,20 @@ enable_encoder = False
 
 weight_path = './cache/flashface.ckpt'
 
-gpu = 'cuda'
+# Detect available device
+gpu = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-padding_to_square = PadToSquare(224)
+# Use enhanced transforms for better image quality
+padding_to_square = EnhancedPadToSquare(224, padding_mode='constant', fill=0)
 
-retinaface_transforms = T.Compose([PadToSquare(size=640), T.ToTensor()])
+# Use enhanced transforms for retinaface with better anti-aliasing
+retinaface_transforms = T.Compose([
+    EnhancedPadToSquare(size=640, padding_mode='constant', fill=0), 
+    T.ToTensor()
+])
 
 retinaface = retinaface(pretrained=True,
-                        device='cuda').eval().requires_grad_(False)
+                        device=gpu).eval().requires_grad_(False)
 
 
 def detect_face(imgs=None):
@@ -93,7 +109,7 @@ def detect_face(imgs=None):
     return face_imgs
 
 
-if not DEBUG_VIEW and not SKEP_LOAD:
+if not DEBUG_VIEW and not SKEP_LOAD and not SKIP_LOAD:
     clip_tokenizer = data.CLIPTokenizer(padding='eos')
     clip = getattr(models, cfg.clip_model)(
         pretrained=True).eval().requires_grad_(False).textual.to(gpu)
@@ -109,7 +125,7 @@ if not DEBUG_VIEW and not SKEP_LOAD:
     unet.share_cache['num_pairs'] = cfg.num_pairs
 
     if LOAD_FLAG:
-        model_weight = torch.load(weight_path, map_location='cpu')
+        model_weight = load_model_weights(weight_path, device='cpu')
         msg = unet.load_state_dict(model_weight, strict=True)
         print(msg)
 
@@ -122,9 +138,11 @@ if not DEBUG_VIEW and not SKEP_LOAD:
                                          prediction_type=cfg.prediction_type)
     diffusion.num_pairs = cfg.num_pairs
 
-face_transforms = Compose(
-    [T.ToTensor(),
-     T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
+face_transforms = create_face_transforms(
+    mean=[0.5, 0.5, 0.5],
+    std=[0.5, 0.5, 0.5],
+    size=224
+)
 
 
 def encode_text(m, x):
@@ -160,7 +178,12 @@ def generate(
     default_neg_prompt='blurry, ugly, tiling, poorly drawn hands, poorly drawn feet, poorly drawn face, out of frame, extra limbs, disfigured, deformed, body out of frame, bad anatomy, watermark, signature, cut off, low contrast, underexposed, overexposed, bad art, beginner, amateur, distorted face',
     need_detect=True,
     lamda_feat_before_ref_guidence=0.85,
-    progress=gr.Progress()):
+    progress=gr.Progress(),
+    clip_model=None,
+    clip_tokenizer=None,
+    autoencoder_model=None,
+    unet_model=None,
+    diffusion_model=None):
     reference_faces = [
         reference_face_1, reference_face_2, reference_face_3, reference_face_4
     ]
@@ -217,7 +240,7 @@ def generate(
     empty_mask[face_bbox[1]:face_bbox[1] + max_size,
                face_bbox[0]:face_bbox[0] + max_size] = 1
 
-    empty_mask = empty_mask[::8, ::8].cuda()
+    empty_mask = empty_mask[::8, ::8].to(gpu)
     empty_mask = empty_mask[None].repeat(num_sample, 1, 1)
 
     pasted_ref_faces = []
@@ -232,13 +255,13 @@ def generate(
 
     faces = torch.stack(pasted_ref_faces, dim=0).to(gpu)
 
-    c = encode_text(clip, clip_tokenizer([pos_prompt]).to(gpu))
+    c = encode_text(clip_model, clip_tokenizer([pos_prompt]).to(gpu))
     c = c[None].repeat(num_sample, 1, 1, 1).flatten(0, 1)
     c = {'context': c}
 
-    single_null_context = encode_text(clip,
+    single_null_context = encode_text(clip_model,
                                       clip_tokenizer([neg_prompt
-                                                      ]).cuda()).to(gpu)
+                                                      ]).to(gpu))
     null_context = single_null_context
     nc = {
         'context': null_context[None].repeat(num_sample, 1, 1,
@@ -246,45 +269,56 @@ def generate(
     }
 
     ref_z0 = cfg.ae_scale * torch.cat([
-        autoencoder.sample(u, deterministic=True)
+        autoencoder_model.sample(u, deterministic=True)
         for u in faces.split(cfg.ae_batch_size)
     ])
     #  ref_z0 = ref_z0[None].repeat(num_sample, 1,1,1,1).flatten(0,1)
-    unet.share_cache['num_pairs'] = 4
-    unet.share_cache['ref'] = ref_z0
-    unet.share_cache['similarity'] = torch.tensor(lamda_feat).cuda()
-    unet.share_cache['ori_similarity'] = torch.tensor(lamda_feat).cuda()
-    unet.share_cache['lamda_feat_before_ref_guidence'] = torch.tensor(
-        lamda_feat_before_ref_guidence).cuda()
-    unet.share_cache['ref_context'] = single_null_context.repeat(
+    unet_model.share_cache['num_pairs'] = 4
+    unet_model.share_cache['ref'] = ref_z0
+    unet_model.share_cache['similarity'] = torch.tensor(lamda_feat).to(gpu)
+    unet_model.share_cache['ori_similarity'] = torch.tensor(lamda_feat).to(gpu)
+    unet_model.share_cache['lamda_feat_before_ref_guidence'] = torch.tensor(
+        lamda_feat_before_ref_guidence).to(gpu)
+    unet_model.share_cache['ref_context'] = single_null_context.repeat(
         len(ref_z0), 1, 1)
-    unet.share_cache['masks'] = empty_mask
-    unet.share_cache['classifier'] = face_guidence
-    unet.share_cache[
+    unet_model.share_cache['masks'] = empty_mask
+    unet_model.share_cache['classifier'] = face_guidence
+    unet_model.share_cache[
         'step_to_launch_face_guidence'] = step_to_launch_face_guidence
 
-    diffusion.classifier = face_guidence
+    diffusion_model.classifier = face_guidence
 
     progress(0, desc='starting')
-    diffusion.progress = progress
+    diffusion_model.progress = progress
     # sample
     with amp.autocast(dtype=cfg.flash_dtype), torch.no_grad():
-        z0 = diffusion.sample(solver=solver,
-                              noise=torch.empty(num_sample,
-                                                4,
-                                                768 // 8,
-                                                768 // 8,
-                                                device=gpu).normal_(),
-                              model=unet,
-                              model_kwargs=[c, nc],
-                              steps=steps,
-                              guide_scale=text_control_scale,
-                              guide_rescale=0.5,
-                              show_progress=True,
-                              discretization=cfg.discretization)
+        from ldm.ops.diffusion import SampleConfig
+        noise = torch.empty(num_sample,
+                           4,
+                           768 // 8,
+                           768 // 8,
+                           device=gpu).normal_()
+        config = SampleConfig(
+            model_kwargs=[c, nc],
+            guide_scale=text_control_scale,
+            guide_rescale=0.5,
+            solver=solver,
+            steps=steps,
+            discretization='linspace',
+            show_progress=True
+        )
+        z0 = diffusion_model.sample(
+            shape=noise.shape,
+            model=unet_model,
+            model_kwargs=config.model_kwargs,
+            device=gpu,
+            guide_scale=config.guide_scale,
+            guide_rescale=config.guide_rescale,
+            seed=seed if seed != -1 else None
+        )
 
-    imgs = autoencoder.decode(z0 / cfg.ae_scale)
-    del unet.share_cache['ori_similarity']
+    imgs = autoencoder_model.decode(z0 / cfg.ae_scale)
+    del unet_model.share_cache['ori_similarity']
     # output
     imgs = (imgs.permute(0, 2, 3, 1) * 127.5 + 127.5).cpu().numpy().clip(
         0, 255).astype(np.uint8)
@@ -295,11 +329,14 @@ def generate(
 
     return imgs
 
-block = gr.Blocks().queue()
-with block:
-    gr.Markdown(
-            '# <center> FlashFace-SD1.5 </center>'
-        )
+# Skip Gradio interface when imported as module
+"""
+if __name__ == "__main__":
+    block = gr.Blocks().queue()
+    with block:
+        gr.Markdown(
+                '# <center> FlashFace-SD1.5 </center>'
+            )
     with gr.Column():
         gr.Markdown(
             '请上传 1 到 4 张包含包含您脸部的参考图像，**提供的人脸图片越多样，生成的效果越好**, 请确保一张图只有一个人脸，如包含多张人脸或者不清晰人脸可能会导致应用无法正常运行'
@@ -466,3 +503,4 @@ with block:
                      outputs=[result_gallery])
 
 block.launch(server_name='0.0.0.0')
+"""

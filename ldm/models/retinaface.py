@@ -10,6 +10,8 @@ import torch.nn.functional as F
 from torchvision.models import resnet50
 from torchvision.models._utils import IntermediateLayerGetter
 
+from ..utils import load_model_weights
+
 __all__ = ['RetinaFace', 'retinaface', 'crop_face']
 
 CONFIGS = {
@@ -42,7 +44,7 @@ CONFIGS = {
 }
 
 
-def conv_bn(in_dim, out_dim, stride=1, leaky=0):
+def conv_bn(in_dim, out_dim, stride=1, leaky=0.0):
     return nn.Sequential(nn.Conv2d(in_dim, out_dim, 3, stride, 1, bias=False),
                          nn.BatchNorm2d(out_dim),
                          nn.LeakyReLU(negative_slope=leaky, inplace=True))
@@ -53,7 +55,7 @@ def conv_bn_no_relu(in_dim, out_dim, stride):
                          nn.BatchNorm2d(out_dim))
 
 
-def conv_bn1X1(in_dim, out_dim, stride, leaky=0):
+def conv_bn1X1(in_dim, out_dim, stride, leaky=0.0):
     return nn.Sequential(
         nn.Conv2d(in_dim, out_dim, 1, stride, padding=0, bias=False),
         nn.BatchNorm2d(out_dim),
@@ -384,7 +386,13 @@ def retinaface(pretrained=False, device='cpu', backbone='resnet50', ckpt_path=No
         if(ckpt_path is None):
             ckpt_path = Path(__file__).parents[4] / "models" / "facedetection" / f"retinaface_{backbone}.pth"
 
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        # Check for safetensors version first
+        safetensors_path = Path(str(ckpt_path).replace('.pth', '.safetensors'))
+        if safetensors_path.exists():
+            state_dict = load_model_weights(str(safetensors_path), device=device)
+        else:
+            state_dict = load_model_weights(str(ckpt_path), device=device)
+        model.load_state_dict(state_dict)
     else:
         # init a model on device
         with torch.device(device):

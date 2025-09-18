@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import torchvision.transforms as T
 
 from ..ops.utils import scaled_dot_product_attention
+from ..utils import load_model_weights
 
 __all__ = ['clip_vit_l_14']
 
@@ -21,8 +22,8 @@ class QuickGELU(nn.Module):
 
 class LayerNorm(nn.LayerNorm):
 
-    def forward(self, x):
-        return super().forward(x.float()).type_as(x)
+    def forward(self, input):
+        return super().forward(input.float()).type_as(input)
 
 
 class SelfAttention(nn.Module):
@@ -269,13 +270,23 @@ class VisionTransformer(nn.Module):
         x = self.transformer(x)
 
         # head
-        x = self.post_norm(x)
+        if isinstance(self.post_norm, nn.Module):
+            x = self.post_norm(x)
         if self.pool_type == 'token':
-            x = torch.mm(x[:, 0, :], self.head)
+            if isinstance(self.head, nn.Parameter):
+                x = torch.mm(x[:, 0, :], self.head)
+            else:
+                raise TypeError("Expected head to be a Parameter for pool_type='token'")
         elif self.pool_type == 'token_fc':
-            x = self.head(x[:, 0, :])
+            if isinstance(self.head, nn.Linear):
+                x = self.head(x[:, 0, :])
+            else:
+                raise TypeError("Expected head to be a Linear for pool_type='token_fc'")
         elif self.pool_type == 'attn_pool':
-            x = self.head(x)
+            if isinstance(self.head, AttentionPool):
+                x = self.head(x)
+            else:
+                raise TypeError("Expected head to be AttentionPool for pool_type='attn_pool'")
         else:
             raise ValueError(f'Unexpected pool_type {self.pool_type}')
         return x
@@ -347,9 +358,15 @@ class TextTransformer(nn.Module):
         x = self.norm(x)
         x = x[torch.arange(x.size(0)), index]
         if self.head_bias:
-            x = self.head(x)
+            if isinstance(self.head, nn.Linear):
+                x = self.head(x)
+            else:
+                raise TypeError("Expected head to be a Linear when head_bias is True")
         else:
-            x = torch.mm(x, self.head)
+            if isinstance(self.head, nn.Parameter):
+                x = torch.mm(x, self.head)
+            else:
+                raise TypeError("Expected head to be a Parameter when head_bias is False")
         return x
 
 
@@ -506,11 +523,16 @@ def _clip(pretrained=False,
     if pretrained and pretrained_name:
         path = Path(__file__).parents[4] / "models" / "clip" / "openai-clip-vit-large-14.pth"
         assert pretrained_name in str(path)
-        # load
-        model.load_state_dict(torch.load(path,
-                                         map_location=device,
-                                         weights_only=True),
-                              strict=False)
+        
+        # Check for safetensors version first
+        safetensors_path = path.with_suffix('.safetensors')
+        if safetensors_path.exists():
+            state_dict = load_model_weights(str(safetensors_path), device=device)
+        else:
+            state_dict = load_model_weights(str(path), device=device)
+        
+        # Load the state dict
+        model.load_state_dict(state_dict, strict=False)
 
     # set device
 
@@ -520,7 +542,7 @@ def _clip(pretrained=False,
     # init transforms
     if return_transforms:
         # mean and std
-        if 'siglip' in pretrained_name.lower():
+        if pretrained_name and 'siglip' in pretrained_name.lower():
             mean, std = [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]
         else:
             mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
@@ -537,30 +559,20 @@ def _clip(pretrained=False,
     # init tokenizer
     if return_tokenizer:
         from ldm import data
-        if 'siglip' in pretrained_name.lower():
-            tokenizer = data.HuggingfaceTokenizer(
-                name=f'timm/{pretrained_name}',
-                length=model.text_len,
-                clean='canonicalize')
-        elif 'xlm' in pretrained_name.lower():
-            tokenizer = data.HuggingfaceTokenizer(name='xlm-roberta-large',
-                                                  length=model.max_text_len -
-                                                  2,
-                                                  clean='whitespace')
-        elif 'mba' in pretrained_name.lower():
-            tokenizer = data.HuggingfaceTokenizer(
-                name='facebook/xlm-roberta-xl',
-                length=model.max_text_len - 2,
-                clean='whitespace')
-        else:
-            tokenizer = data.CLIPTokenizer(length=model.text_len,
-                                           padding=tokenizer_padding)
+        # Only use CLIPTokenizer as it seems HuggingfaceTokenizer is not available
+        tokenizer = data.CLIPTokenizer(length=model.text_len,
+                                       padding=tokenizer_padding)
         output += (tokenizer, )
     return output[0] if len(output) == 1 else output
 
 
 def clip_vit_l_14(pretrained=False,
                   pretrained_name='openai-clip-vit-large-14',
+                  return_transforms=False,
+                  return_tokenizer=False,
+                  tokenizer_padding='eos',
+                  dtype=torch.float32,
+                  device='cpu',
                   **kwargs):
     cfg = dict(embed_dim=768,
                image_size=224,
@@ -575,4 +587,14 @@ def clip_vit_l_14(pretrained=False,
                text_layers=12,
                activation='quick_gelu')
     cfg.update(**kwargs)
-    return _clip(pretrained, pretrained_name, **cfg)
+    return _clip(
+        pretrained=pretrained, 
+        pretrained_name=pretrained_name, 
+        model_cls=CLIP,
+        return_transforms=return_transforms,
+        return_tokenizer=return_tokenizer,
+        tokenizer_padding=tokenizer_padding,
+        dtype=dtype,
+        device=device,
+        **cfg
+    )

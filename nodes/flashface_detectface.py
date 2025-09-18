@@ -3,15 +3,30 @@ import torch
 import torchvision.transforms as T
 import torchvision.transforms.functional as F
 from PIL import ImageDraw
+from pathlib import Path
 
 from ..flashface.all_finetune.utils import PadToSquare, get_padding
-from ..ldm.models.retinaface import crop_face, retinaface
+from ..ldm.models.retinaface import crop_face, RetinaFace
+from ..ldm.utils import load_model_weights
+from ..flashface.models.model_registry import get_model_path as get_registry_model_path
 
 padding_to_square = PadToSquare(224)
-
 retinaface_transforms = T.Compose([PadToSquare(size=640), T.ToTensor()])
 
-retinaface = retinaface(pretrained=True, device='cuda').eval().requires_grad_(False)
+# Create the retinaface model
+retinaface_model = RetinaFace(backbone='resnet50').to('cuda')
+
+# Load pretrained weights using the model registry
+model_path = get_registry_model_path('retinaface', auto_download=True)
+if model_path is None:
+    # Fallback to the legacy path
+    model_path = str(Path(__file__).parents[2] / "models" / "facedetection" / "retinaface_resnet50.pth")
+    print(f"Warning: Using fallback RetinaFace model path: {model_path}")
+
+print(f"Loading RetinaFace model from: {model_path}")
+model_weights = load_model_weights(model_path, device='cuda')
+retinaface_model.load_state_dict(model_weights, strict=True)
+retinaface_model.eval().requires_grad_(False)
 
 class FlashFaceDetectFace:
     @classmethod
@@ -48,7 +63,7 @@ class FlashFaceDetectFace:
 
         # detection
         imgs = torch.stack([retinaface_transforms(u) for u in pil_imgs]).to('cuda')
-        boxes, kpts = retinaface.detect(imgs, min_thr=0.6)
+        boxes, kpts = retinaface_model.detect(imgs, min_thr=0.6)
 
         face_imgs = []
         tensor_face_imgs = []

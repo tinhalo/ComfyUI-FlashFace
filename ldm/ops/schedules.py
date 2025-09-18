@@ -1,4 +1,4 @@
-"""Noise schedules of denoising diffusion probabilistic models.
+"""Denoising diffusion probabilistic models.
 
 We consider a variance preserving (VP) process, and we use the standard deviation
 sigma_t of the noise added to the signal at time t to represent the noise schedule. The
@@ -19,14 +19,16 @@ __all__ = [
     'scaled_linear_schedule', 'cosine_schedule', 'sigmoid_schedule',
     'karras_schedule', 'exponential_schedule', 'polyexponential_schedule',
     'vp_schedule', 'logsnr_cosine_schedule', 'logsnr_cosine_shifted_schedule',
-    'logsnr_cosine_interp_schedule', 'noise_schedule'
+    'logsnr_cosine_interp_schedule', 'noise_schedule', 'beta57_schedule',
+    'bong_tangent_scheduler'
 ]
 
 # --------------------- conversion between VE and VP sigmas ---------------------#
 
 
 def vp_to_ve(sigmas):
-    if isinstance(sigmas, numbers.Number):
+    """Convert variance preserving (VP) sigmas to variance exploding (VE) sigmas."""
+    if isinstance(sigmas, (int, float)):
         sigmas = (sigmas ** 2 / (1 - sigmas ** 2)) ** 0.5 \
             if sigmas < 1. else float('inf')
     else:
@@ -36,7 +38,8 @@ def vp_to_ve(sigmas):
 
 
 def ve_to_vp(sigmas):
-    if isinstance(sigmas, numbers.Number):
+    """Convert variance exploding (VE) sigmas to variance preserving (VP) sigmas."""
+    if isinstance(sigmas, (int, float)):
         sigmas = (sigmas ** 2 / (1 + sigmas ** 2)) ** 0.5 \
             if sigmas < float('inf') else 1.
     else:
@@ -183,6 +186,77 @@ def logsnr_cosine_interp_schedule(n,
         _logsnr_cosine_interp(n, logsnr_min, logsnr_max, scale_min, scale_max))
 
 
+def beta57_schedule(n, alpha=0.5, beta=0.7):
+    """Beta scheduler with alpha=0.5, beta=0.7 as used in RES4LYF.
+
+    This implements the beta57 scheduler from RES4LYF compatibility.
+    """
+    # Create beta values using the beta scheduler formula
+    # beta_t = (beta - alpha) * t + alpha, where t goes from 0 to 1
+    t = torch.linspace(0, 1, n, dtype=torch.float64)
+    betas = (beta - alpha) * t + alpha
+    return betas_to_sigmas(betas)
+
+
+def get_bong_tangent_sigmas(steps, slope, pivot, start, end):
+    """Helper function for bong_tangent_scheduler to compute tangent-based sigmas."""
+    smax = ((2/math.pi)*math.atan(-slope*(0-pivot))+1)/2
+    smin = ((2/math.pi)*math.atan(-slope*((steps-1)-pivot))+1)/2
+
+    srange = smax-smin
+    sscale = start - end
+
+    sigmas = [(((2/math.pi)*math.atan(-slope*(x-pivot))+1)/2 - smin) * (1/srange) * sscale + end
+              for x in range(steps)]
+    
+    return sigmas
+
+
+def bong_tangent_scheduler(n, start=1.0, middle=0.5, end=0.0, pivot_1=0.6, pivot_2=0.6,
+                          slope_1=0.2, slope_2=0.2, pad=False):
+    """Bong tangent scheduler from RES4LYF compatibility.
+
+    This implements the bong_tangent_scheduler from RES4LYF, which uses a two-stage
+    tangent-based approach to generate sigma schedules.
+
+    Args:
+        n: Number of steps
+        start: Starting sigma value
+        middle: Middle sigma value for the transition
+        end: Ending sigma value
+        pivot_1: Pivot point for the first stage (as fraction of steps)
+        pivot_2: Pivot point for the second stage (as fraction of steps)
+        slope_1: Slope parameter for the first stage
+        slope_2: Slope parameter for the second stage
+        pad: Whether to pad the end with a zero value
+
+    Returns:
+        torch.Tensor: Sigma schedule
+    """
+    steps = n + 2
+
+    midpoint = int((steps*pivot_1 + steps*pivot_2) / 2)
+    pivot_1 = int(steps * pivot_1)
+    pivot_2 = int(steps * pivot_2)
+
+    slope_1 = slope_1 / (steps/40)
+    slope_2 = slope_2 / (steps/40)
+
+    stage_2_len = steps - midpoint
+    stage_1_len = steps - stage_2_len
+
+    tan_sigmas_1 = get_bong_tangent_sigmas(stage_1_len, slope_1, pivot_1, start, middle)
+    tan_sigmas_2 = get_bong_tangent_sigmas(stage_2_len, slope_2, pivot_2 - stage_1_len, middle, end)
+    
+    tan_sigmas_1 = tan_sigmas_1[:-1]
+    if pad:
+        tan_sigmas_2 = tan_sigmas_2 + [0]
+
+    tan_sigmas = torch.tensor(tan_sigmas_1 + tan_sigmas_2, dtype=torch.float64)
+
+    return tan_sigmas
+
+
 # ------------------------ a unified wrapper for all schedules ------------------------#
 
 
@@ -202,11 +276,13 @@ def noise_schedule(schedule='logsnr_cosine_interp',
         'vp': vp_schedule,
         'logsnr_cosine': logsnr_cosine_schedule,
         'logsnr_cosine_shifted': logsnr_cosine_shifted_schedule,
-        'logsnr_cosine_interp': logsnr_cosine_interp_schedule
+        'logsnr_cosine_interp': logsnr_cosine_interp_schedule,
+        'beta57': beta57_schedule,
+        'bong_tangent': bong_tangent_scheduler
     }[schedule](n, **kwargs)
 
     # post-processing
-    if zero_terminal_snr and sigmas.max() != 1.0:
+    if zero_terminal_snr and not torch.isclose(sigmas.max(), torch.tensor(1.0)):
         scale = (1.0 - sigmas.min()) / (sigmas.max() - sigmas.min())
         sigmas = sigmas.min() + scale * (sigmas - sigmas.min())
     return sigmas

@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..ops.utils import scaled_dot_product_attention
+from ..utils import load_model_weights
 
 __all__ = [
     'sd_v1_vae',
@@ -22,9 +23,9 @@ def group_norm(dim):
 
 class Upsample(nn.Upsample):
 
-    def forward(self, x):
+    def forward(self, input):
         """Fix bfloat16 support for nearest neighbor interpolation."""
-        return super().forward(x.float()).type_as(x)
+        return super().forward(input.float()).type_as(input)
 
 
 class Resample(nn.Module):
@@ -143,15 +144,18 @@ class Encoder(nn.Module):
                 downsamples.append(Resample(out_dim, mode='downsample'))
                 scale /= 2.0
         self.downsamples = nn.Sequential(*downsamples)
+        
+        # Store the final dimension for use in middle and head
+        final_dim = dims[-1]
 
         # middle blocks
-        self.middle = nn.Sequential(ResidualBlock(out_dim, out_dim, dropout),
-                                    AttentionBlock(out_dim),
-                                    ResidualBlock(out_dim, out_dim, dropout))
+        self.middle = nn.Sequential(ResidualBlock(final_dim, final_dim, dropout),
+                                    AttentionBlock(final_dim),
+                                    ResidualBlock(final_dim, final_dim, dropout))
 
         # output blocks
-        self.head = nn.Sequential(group_norm(out_dim), nn.SiLU(),
-                                  nn.Conv2d(out_dim, z_dim, 3, padding=1))
+        self.head = nn.Sequential(group_norm(final_dim), nn.SiLU(),
+                                  nn.Conv2d(final_dim, z_dim, 3, padding=1))
 
     def forward(self, x):
         x = self.conv1(x)
@@ -191,6 +195,7 @@ class Decoder(nn.Module):
 
         # upsample blocks
         upsamples = []
+        final_dim = dims[-1]  # Store the last dimension for use outside the loop
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
             # residual (+attention) blocks
             for _ in range(num_res_blocks + 1):
@@ -198,6 +203,9 @@ class Decoder(nn.Module):
                 if scale in attn_scales:
                     upsamples.append(AttentionBlock(out_dim))
                 in_dim = out_dim
+            
+            # Update final_dim with the last processed dimension
+            final_dim = out_dim
 
             # upsample block
             if i != len(dim_mult) - 1:
@@ -206,8 +214,8 @@ class Decoder(nn.Module):
         self.upsamples = nn.Sequential(*upsamples)
 
         # output blocks
-        self.head = nn.Sequential(group_norm(out_dim), nn.SiLU(),
-                                  nn.Conv2d(out_dim, 3, 3, padding=1))
+        self.head = nn.Sequential(group_norm(final_dim), nn.SiLU(),
+                                  nn.Conv2d(final_dim, 3, 3, padding=1))
 
     def forward(self, x):
         x = self.conv1(x)
@@ -274,16 +282,47 @@ class AutoencoderKL(nn.Module):
 def sd_v1_vae(pretrained=False, device='cpu', **kwargs):
     """Autoencoder of Stable Diffusion 1.x (1.1~1.5 share a same
     autoencoder)."""
-    cfg = dict(dim=128,
-               z_dim=4,
-               dim_mult=[1, 2, 4, 4],
-               num_res_blocks=2,
-               attn_scales=[],
-               dropout=0.0)
-    cfg.update(**kwargs)
-    model = AutoencoderKL(**cfg).to(device)
+    # Define default configuration
+    cfg = {
+        'dim': 128,
+        'z_dim': 4,
+        'dim_mult': [1, 2, 4, 4],
+        'num_res_blocks': 2,
+        'attn_scales': [],
+        'dropout': 0.0
+    }
+    
+    # Update configuration with user provided values
+    for key, value in kwargs.items():
+        cfg[key] = value
+    
+    # Create a clean dictionary with correct types
+    model_params = {}
+    
+    # Set integer parameters
+    model_params['dim'] = int(cfg['dim']) if isinstance(cfg['dim'], (int, float)) else cfg['dim']
+    model_params['z_dim'] = int(cfg['z_dim']) if isinstance(cfg['z_dim'], (int, float)) else cfg['z_dim']
+    model_params['num_res_blocks'] = int(cfg['num_res_blocks']) if isinstance(cfg['num_res_blocks'], (int, float)) else cfg['num_res_blocks']
+    
+    # Set float parameters
+    model_params['dropout'] = float(cfg['dropout']) if isinstance(cfg['dropout'], (int, float)) else cfg['dropout']
+    
+    # Pass through other parameters that don't need type conversion
+    model_params['dim_mult'] = cfg['dim_mult']
+    model_params['attn_scales'] = cfg['attn_scales']
+    
+    # Create the model
+    model = AutoencoderKL(**model_params).to(device)
+    
+    # Load pretrained weights if requested
     if pretrained:
-        model.load_state_dict(
-            torch.load(Path(__file__).parents[4] / "models" / "vae" / "sd-v1-vae.pth",
-                       map_location=device))
+        vae_path = Path(__file__).parents[4] / "models" / "vae" / "sd-v1-vae.pth"
+        # Check for safetensors version first
+        safetensors_path = vae_path.with_suffix('.safetensors')
+        if safetensors_path.exists():
+            state_dict = load_model_weights(str(safetensors_path), device=device)
+        else:
+            state_dict = load_model_weights(str(vae_path), device=device)
+        model.load_state_dict(state_dict)
+    
     return model

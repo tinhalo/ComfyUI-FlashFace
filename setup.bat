@@ -1,5 +1,6 @@
 @echo off
 
+python install_dependencies.py
 pip install -r requirements-comfy.txt
 
 cd ..\..\models
